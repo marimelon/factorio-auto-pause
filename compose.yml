@@ -1,0 +1,20 @@
+services:
+  factorio:
+    image: factoriotools/factorio:1.1.87
+    container_name: factorio_server
+    volumes:
+      - ./data:/factorio
+    ports:
+      # - '27015:27015/tcp' # RCON
+      - '34197:34197/udp'
+      
+  factorio_auto_pause:
+    image: ghcr.io/marimelon/factorio-auto-pause
+    depends_on: 
+      - factorio
+    command:
+      - -container=factorio_server    # Container Name
+      - -server=factorio_server:27015 # RCON Host 
+      - -password=<RCON_PASSWORD>     # RCON password (from ./data/factorio/config/rconpw)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
