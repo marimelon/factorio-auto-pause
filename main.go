@@ -19,15 +19,17 @@ import (
 )
 
 type Option struct {
-	server      net.TCPAddr
-	password    string
-	containerID string
+	server         net.TCPAddr
+	password       string
+	containerID    string
+	timeOutSeconds int
 }
 
 func loadOption() Option {
 	s := flag.String("server", "127.0.0.1:12345", "server:port")
 	p := flag.String("password", "", "rcon password")
 	c := flag.String("container", "", "factorio container Id")
+	t := flag.Int("timeout", 0, "Timeout in seconds for waiting the RCON server")
 
 	flag.Parse()
 
@@ -36,7 +38,7 @@ func loadOption() Option {
 		log.Fatal(err)
 	}
 
-	return Option{server: *ip, password: *p, containerID: *c}
+	return Option{server: *ip, password: *p, containerID: *c, timeOutSeconds: *t}
 }
 
 type FactorioState struct {
@@ -46,28 +48,30 @@ type FactorioState struct {
 }
 
 func waitStartRconServer(ctx context.Context, server net.TCPAddr) error {
-	maxRetries := 30
 	interval := 2 * time.Second
 
-	for i := 0; i < maxRetries; i++ {
-		conn, err := net.DialTCP("tcp", nil, &server)
-		if t, ok := err.(*net.OpError); ok {
-			if tt, ok := t.Err.(*os.SyscallError); ok && tt.Err == syscall.ECONNREFUSED {
-				slog.Info("waiting rcon server...")
-				time.Sleep(interval)
-				continue
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			conn, err := net.DialTCP("tcp", nil, &server)
+			if t, ok := err.(*net.OpError); ok {
+				if tt, ok := t.Err.(*os.SyscallError); ok && tt.Err == syscall.ECONNREFUSED {
+					slog.Info("waiting rcon server...")
+					time.Sleep(interval)
+					continue
+				}
 			}
-		}
 
-		if err != nil {
-			return err
-		}
+			if err != nil {
+				return err
+			}
 
-		conn.Close()
-		return nil
+			conn.Close()
+			return nil
+		}
 	}
-
-	return errors.New("Connection failed to RCON Server")
 }
 
 func waitEvent(ctx context.Context, docker *client.Client, containerID string, c chan interface{}) {
@@ -122,8 +126,17 @@ func main() {
 	}
 	docker.NegotiateAPIVersion(ctx)
 
-	if err := waitStartRconServer(ctx, opt.server); err != nil {
-		log.Fatal(err)
+	{
+		timeoutCtx := ctx
+		var cancel context.CancelFunc
+		if opt.timeOutSeconds > 0 {
+			timeoutCtx, cancel = context.WithTimeout(ctx, time.Duration(opt.timeOutSeconds)*time.Second)
+			defer cancel()
+		}
+
+		if err := waitStartRconServer(timeoutCtx, opt.server); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	factorio, err := NewFactorioRcon(opt.server.String(), opt.password)
